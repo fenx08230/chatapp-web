@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="ChatApp - Telegram-style instant messaging">
+  <title>ChatApp</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<div id="app">
+  <!-- Login Screen -->
+  <div v-if="!loggedIn" class="login-screen">
+    <div class="login-card">
+      <div class="login-logo">💬</div>
+      <h1 class="login-title">ChatApp</h1>
+      <p class="login-sub">安全、快速的跨平台即时通讯</p>
+      <div class="login-tabs">
+        <button :class="{active: loginMode==='login'}" @click="loginMode='login'">登录</button>
+        <button :class="{active: loginMode==='register'}" @click="loginMode='register'">注册</button>
+      </div>
+      <input v-if="loginMode==='register'" v-model="regNickname" placeholder="昵称" class="login-input" @keyup.enter="doAuth">
+      <input v-model="username" placeholder="用户名" class="login-input" @keyup.enter="doAuth">
+      <input v-model="password" type="password" placeholder="密码" class="login-input" @keyup.enter="doAuth">
+      <button class="login-btn" @click="doAuth">{{ loginMode==='register' ? '注册并登录' : '登录' }}</button>
+      <p v-if="authError" class="login-error">{{ authError }}</p>
+    </div>
+  </div>
+
+  <!-- Main App (Telegram-style layout) -->
+  <div v-else class="app-layout">
+    <!-- Sidebar -->
+    <div class="sidebar" :class="{hidden: mobileShowChat}">
+      <div class="sidebar-header">
+        <h2>消息</h2>
+        <div class="sidebar-actions">
+          <button class="icon-btn" @click="showPanel='contacts'" title="通讯录">👥</button>
+          <button class="icon-btn" @click="showPanel='profile'" title="设置">⚙️</button>
+        </div>
+      </div>
+      <div class="search-bar">
+        <input v-model="searchQuery" placeholder="搜索会话...">
+      </div>
+      <div class="conversation-list">
+        <div v-for="conv in filteredConversations" :key="conv.id"
+             class="conv-item" :class="{active: activeChat?.id===conv.id}"
+             @click="openConversation(conv)">
+          <div class="conv-avatar" :style="{background: avatarColor(conv.name)}">
+            {{ conv.isGroup ? '👥' : initials(conv.name) }}
+            <span v-if="!conv.isGroup && isOnline(conv.userId)" class="online-dot"></span>
+          </div>
+          <div class="conv-info">
+            <div class="conv-top">
+              <span class="conv-name">{{ conv.name }}</span>
+              <span class="conv-time">{{ conv.time }}</span>
+            </div>
+            <div class="conv-bottom">
+              <span class="conv-last">{{ conv.lastMessage }}</span>
+              <span v-if="conv.unread" class="conv-badge">{{ conv.unread }}</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Chat Panel -->
+    <div class="chat-panel" :class="{active: mobileShowChat}" v-if="activeChat">
+      <div class="chat-header">
+        <button class="back-btn" @click="mobileShowChat=false">←</button>
+        <div class="chat-header-info">
+          <h3>{{ activeChat.name }}</h3>
+          <span class="chat-status">{{ activeChat.isGroup ? activeChat.memberCount + ' 位成员' : (isOnline(activeChat.userId) ? '在线' : '离线') }}</span>
+        </div>
+        <button v-if="activeChat.isGroup" class="icon-btn header-settings-btn" @click="openGroupSettings()" title="群组设置">⚙️</button>
+      </div>
+      <div class="chat-messages" ref="messagesContainer">
+        <div v-for="(msg, i) in activeChat.messages" :key="i" class="msg-row" :class="{sent: msg.sent}">
+          <div class="msg-bubble">
+            <div v-if="!msg.sent && msg.sender && activeChat.isGroup" class="msg-sender clickable" :style="{color: avatarColor(msg.sender)}" @click="viewUserProfile(msg.senderId)">{{ msg.sender }}</div>
+            <!-- Text message -->
+            <div v-if="!msg.type || msg.type==='text'" class="msg-text">{{ msg.text }}</div>
+            <!-- Image message -->
+            <div v-else-if="msg.type==='image'" class="msg-text">
+              <img :src="msg.mediaUrl || msg.content" class="msg-image" @click="openLightbox(msg.mediaUrl || msg.content)" alt="图片">
+            </div>
+            <!-- Video message -->
+            <div v-else-if="msg.type==='video'" class="msg-text">
+              <video :src="msg.mediaUrl || msg.content" class="msg-video" controls preload="metadata"></video>
+            </div>
+            <div class="msg-time">{{ msg.time }} <span v-if="msg.sent">✓✓</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="chat-input-bar">
+        <label class="media-btn" title="发送图片/视频">
+          <input type="file" accept="image/*,video/*" @change="uploadMedia" style="display:none">
+          📎
+        </label>
+        <input v-model="messageText" placeholder="输入消息..." @keyup.enter="sendMessage">
+        <button class="send-btn" @click="sendMessage">➤</button>
+      </div>
+    </div>
+
+    <!-- Empty state when no chat selected (desktop) -->
+    <div class="chat-panel empty" v-else>
+      <div class="empty-state">
+        <div class="empty-icon">💬</div>
+        <h3>选择一个对话开始聊天</h3>
+        <p>从左侧选择联系人或群组</p>
+      </div>
+    </div>
+
+    <!-- Contacts Slide Panel -->
+    <div class="slide-panel" :class="{open: showPanel==='contacts'}">
+      <div class="panel-header">
+        <button class="back-btn" @click="showPanel=null">←</button>
+        <h3>通讯录</h3>
+      </div>
+      <div class="panel-body">
+        <div class="panel-actions">
+          <button class="panel-action-btn" @click="showPanel='addFriend'">➕ 添加好友</button>
+          <button class="panel-action-btn outline" @click="showPanel='createGroup'">👥 创建群组</button>
+        </div>
+        <div class="panel-section-title" v-if="onlineContacts.length">在线 · {{ onlineContacts.length }}</div>
+        <div v-for="c in onlineContacts" :key="c.id" class="contact-row" @click="startChatWith(c)">
+          <div class="conv-avatar sm" :style="{background: avatarColor(c.nickname||c.username)}">
+            {{ initials(c.nickname||c.username) }}
+            <span class="online-dot"></span>
+          </div>
+          <div>
+            <div class="contact-name">{{ c.nickname || c.username }}</div>
+            <div class="contact-status-text">在线</div>
+          </div>
+        </div>
+        <div class="panel-section-title" v-if="offlineContacts.length">离线 · {{ offlineContacts.length }}</div>
+        <div v-for="c in offlineContacts" :key="c.id" class="contact-row" @click="startChatWith(c)">
+          <div class="conv-avatar sm" :style="{background: avatarColor(c.nickname||c.username)}">
+            {{ initials(c.nickname||c.username) }}
+          </div>
+          <div>
+            <div class="contact-name">{{ c.nickname || c.username }}</div>
+            <div class="contact-status-text">离线</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Add Friend Panel -->
+    <div class="slide-panel" :class="{open: showPanel==='addFriend'}">
+      <div class="panel-header">
+        <button class="back-btn" @click="showPanel='contacts'">←</button>
+        <h3>添加好友</h3>
+      </div>
+      <div class="panel-body" style="padding:20px">
+        <input v-model="friendSearch" class="modal-input" placeholder="输入用户名搜索...">
+        <button class="modal-btn" @click="searchFriend">搜索</button>
+        <div v-if="searchResults.length" style="margin-top:16px">
+          <div v-for="u in searchResults" :key="u.id" class="contact-row">
+            <div class="conv-avatar sm" :style="{background: avatarColor(u.nickname||u.username)}">{{ initials(u.nickname||u.username) }}</div>
+            <div style="flex:1"><div class="contact-name">{{ u.nickname || u.username }}</div></div>
+            <button class="small-btn" @click="addFriend(u.id)">添加</button>
+          </div>
+        </div>
+        <p v-if="searchNoResult" style="text-align:center;color:#8696a0;margin-top:20px">未找到用户</p>
+      </div>
+    </div>
+
+    <!-- Create Group Panel -->
+    <div class="slide-panel" :class="{open: showPanel==='createGroup'}">
+      <div class="panel-header">
+        <button class="back-btn" @click="showPanel='contacts'">←</button>
+        <h3>创建群组</h3>
+      </div>
+      <div class="panel-body" style="padding:20px">
+        <input v-model="newGroupName" class="modal-input" placeholder="群组名称">
+        <input v-model="newGroupDesc" class="modal-input" placeholder="群组描述（可选）">
+        <div style="font-size:13px;color:#8696a0;margin:12px 0 8px">选择成员：</div>
+        <div v-for="c in contacts" :key="c.id" class="check-row" @click="toggleGroupMember(c.id)">
+          <div class="check-box" :class="{checked: groupMembers.has(c.id)}">{{ groupMembers.has(c.id) ? '✓' : '' }}</div>
+          <div class="conv-avatar sm" :style="{background: avatarColor(c.nickname||c.username)}">{{ initials(c.nickname||c.username) }}</div>
+          <span>{{ c.nickname || c.username }}</span>
+        </div>
+        <button class="modal-btn" style="margin-top:16px" @click="createGroup">创建群组</button>
+      </div>
+    </div>
+
+    <!-- Profile Panel -->
+    <div class="slide-panel" :class="{open: showPanel==='profile'}">
+      <div class="panel-header">
+        <button class="back-btn" @click="showPanel=null">←</button>
+        <h3>设置</h3>
+      </div>
+      <div class="panel-body">
+        <div class="profile-card">
+          <div class="profile-avatar" :style="{background: 'linear-gradient(135deg, #075E54, #25D366)'}">{{ initials(user?.nickname || user?.username || '?') }}</div>
+          <div class="profile-name">{{ user?.nickname || user?.username }}</div>
+          <div class="profile-username">@{{ user?.username }}</div>
+        </div>
+        <div class="profile-menu">
+          <div class="menu-item"><span class="mi-icon">👤</span>编辑资料<span class="mi-arrow">›</span></div>
+          <div class="menu-item" @click="showPanel='friendRequests'"><span class="mi-icon">📨</span>好友请求<span class="mi-arrow">›</span></div>
+          <div class="menu-item"><span class="mi-icon">🔔</span>通知设置<span class="mi-arrow">›</span></div>
+          <div class="menu-item"><span class="mi-icon">🔒</span>隐私安全<span class="mi-arrow">›</span></div>
+          <div class="menu-item"><span class="mi-icon">🌐</span>语言<span class="mi-arrow">›</span></div>
+        </div>
+        <button class="logout-btn" @click="logout">退出登录</button>
+      </div>
+    </div>
+
+    <!-- Friend Requests Panel -->
+    <div class="slide-panel" :class="{open: showPanel==='friendRequests'}">
+      <div class="panel-header">
+        <button class="back-btn" @click="showPanel='profile'">←</button>
+        <h3>好友请求</h3>
+      </div>
+      <div class="panel-body">
+        <div v-if="!friendRequests.length" style="text-align:center;color:#8696a0;padding:40px 20px">暂无好友请求</div>
+        <div v-for="r in friendRequests" :key="r.id" class="contact-row" style="padding:12px 20px">
+          <div class="conv-avatar sm" :style="{background: avatarColor(r.nickname||r.username)}">{{ initials(r.nickname||r.username) }}</div>
+          <div style="flex:1"><div class="contact-name">{{ r.nickname || r.username }}</div></div>
+          <button class="small-btn" @click="acceptRequest(r.requestId)">接受</button>
+          <button class="small-btn reject" @click="rejectRequest(r.requestId)">拒绝</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- User Profile Modal -->
+    <div class="slide-panel" :class="{open: showPanel==='userProfile'}">
+      <div class="panel-header">
+        <button class="back-btn" @click="showPanel=null; viewingUser=null">←</button>
+        <h3>用户资料</h3>
+      </div>
+      <div class="panel-body" v-if="viewingUser">
+        <div class="user-profile-card">
+          <div class="profile-avatar" :style="{background: avatarColor(viewingUser.nickname || viewingUser.username)}">
+            {{ initials(viewingUser.nickname || viewingUser.username) }}
+          </div>
+          <div class="profile-name">{{ viewingUser.nickname || viewingUser.username }}</div>
+          <div class="profile-username">@{{ viewingUser.username }}</div>
+          <div class="user-id-text">ID: {{ viewingUser.id }}</div>
+          <div style="margin-top:20px;display:flex;gap:10px;justify-content:center">
+            <button v-if="isAlreadyFriend(viewingUser.id)" class="modal-btn" @click="startChatWithUser(viewingUser)">发送消息</button>
+            <button v-else class="modal-btn" @click="addFriend(viewingUser.id)">添加好友</button>
+            <button class="modal-btn outline" @click="showPanel=null; viewingUser=null">关闭</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Group Settings Panel -->
+    <div class="slide-panel" :class="{open: showPanel==='groupSettings'}">
+      <div class="panel-header">
+        <button class="back-btn" @click="showPanel=null; groupSettings=null">←</button>
+        <h3>群组设置</h3>
+      </div>
+      <div class="panel-body" v-if="groupSettings">
+        <div style="padding:20px">
+          <div style="font-size:18px;font-weight:600;margin-bottom:4px">{{ groupSettings.name }}</div>
+          <div style="font-size:13px;color:var(--text-sec);margin-bottom:16px">{{ groupSettings.description || '暂无描述' }}</div>
+
+          <!-- Approval toggle (owner only) -->
+          <div v-if="groupSettings.isOwner" class="settings-row">
+            <span>加入需要审批</span>
+            <label class="toggle-switch">
+              <input type="checkbox" :checked="groupSettings.approval_required" @change="toggleApproval()">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+
+          <!-- Pending join requests (owner/admin) -->
+          <div v-if="(groupSettings.isOwner || groupSettings.isAdmin) && joinRequests.length" style="margin-top:20px">
+            <div class="panel-section-title">待审批请求 · {{ joinRequests.length }}</div>
+            <div v-for="req in joinRequests" :key="req.id" class="join-request-item">
+              <div class="conv-avatar sm" :style="{background: avatarColor(req.nickname||req.username)}">{{ initials(req.nickname||req.username) }}</div>
+              <div style="flex:1"><div class="contact-name">{{ req.nickname || req.username }}</div></div>
+              <button class="small-btn" @click="approveJoinRequest(req.id)">通过</button>
+              <button class="small-btn reject" @click="rejectJoinRequest(req.id)">拒绝</button>
+            </div>
+          </div>
+
+          <!-- Member list -->
+          <div style="margin-top:20px">
+            <div class="panel-section-title">成员 · {{ groupSettings.members ? groupSettings.members.length : 0 }}</div>
+            <div v-for="m in groupSettings.members" :key="m.id" class="contact-row group-member-item">
+              <div class="conv-avatar sm" :style="{background: avatarColor(m.nickname||m.username)}">{{ initials(m.nickname||m.username) }}</div>
+              <div style="flex:1">
+                <div class="contact-name">
+                  {{ m.nickname || m.username }}
+                  <span v-if="m.role==='owner'" class="role-badge owner">群主</span>
+                  <span v-else-if="m.role==='admin'" class="role-badge admin">管理员</span>
+                  <span v-else class="role-badge member">成员</span>
+                </div>
+              </div>
+              <div v-if="groupSettings.isOwner && m.id !== user.id" class="member-actions">
+                <button v-if="m.role==='member'" class="small-btn" @click="setMemberRole(m.id, 'admin')">设为管理员</button>
+                <button v-else-if="m.role==='admin'" class="small-btn reject" @click="setMemberRole(m.id, 'member')">取消管理员</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Image Lightbox -->
+  <div v-if="lightboxUrl" class="lightbox" @click="lightboxUrl=null">
+    <img :src="lightboxUrl">
+  </div>
+
+  <!-- Toast -->
+  <transition name="toast">
+    <div v-if="toast" class="toast-msg">{{ toast }}</div>
+  </transition>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+<script src="js/app.js" defer></script>
+</body>
+</html>
