@@ -14,7 +14,3 @@ services:
         value: production
       - key: PORT
         value: 3000
-    disk:
-      name: chat-data
-      mountPath: /opt/render/project/src/data
-      sizeGB: 1
