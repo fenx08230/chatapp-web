@@ -1,0 +1,12 @@
+{
+  "name": "chatapp-web",
+  "version": "1.0.0",
+  "description": "Real-time chat application",
+  "scripts": {
+    "postinstall": "cd server && npm install",
+    "start": "node server/app.js"
+  },
+  "engines": {
+    "node": "18.x"
+  }
+}
