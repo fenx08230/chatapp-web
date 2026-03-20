@@ -1,6 +1,15 @@
-# ChatApp - 跨平台即时通讯应用
+---
+title: ChatApp
+emoji: 💬
+colorFrom: green
+colorTo: blue
+sdk: docker
+pinned: false
+---
 
-基于 **UniApp + Node.js** 的全栈聊天应用，支持 iOS、Android、鸿蒙(HarmonyOS) 三端运行。
+# ChatApp - 即时通讯应用
+
+基于 **Node.js + Vue 3** 的全栈聊天应用。
 
 ## 功能特性
 
